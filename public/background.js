@@ -2,6 +2,7 @@ importScripts("vendor/axios.min.js");
 
 const SPOTIFY_CLIENT_ID = "889db36d555d41f1bcc56f22d1e2210c";
 const TOKEN_ENDPOINT = "https://accounts.spotify.com/api/token";
+const DEFAULT_DURATION = 1500; // 25 minutes
 
 // Auth flow with PKCE (Proof Key for Code Exchange)
 const generateRandomString = (length) => {
@@ -24,25 +25,33 @@ const base64encode = (input) => {
     .replace(/\//g, "_");
 };
 
-// Function to make API calls to Spotify
-async function callSpotifyAPI(endpoint, method = "GET", body = null) {
+async function isSpotifyConnected() {
+  const { spotify_access_token, spotify_refresh_token } =
+    await chrome.storage.local.get([
+      "spotify_access_token",
+      "spotify_refresh_token",
+    ]);
+  return Boolean(spotify_access_token || spotify_refresh_token);
+}
+
+// Function to make API calls to Spotify.
+// `isRetry` guards against infinite recursion when a refreshed token
+// still yields 401s (e.g. revoked app access).
+async function callSpotifyAPI(endpoint, method = "GET", body = null, isRetry = false) {
   const { spotify_access_token: token } = await chrome.storage.local.get(
     "spotify_access_token"
   );
   if (!token) {
-    console.log("No Spotify token found. Attempting refresh.");
-    // Attempt to refresh the token if it's missing.
+    if (isRetry) {
+      console.error("Still no token after refresh. Logging out.");
+      await handleLogout();
+      return null;
+    }
     try {
       await refreshToken();
-      // Retry the API call with the new token
-      const { spotify_access_token: newToken } = await chrome.storage.local.get(
-        "spotify_access_token"
-      );
-      if (!newToken) throw new Error("Still no token after refresh.");
-      return callSpotifyAPI(endpoint, method, body); // Recursive call
+      return callSpotifyAPI(endpoint, method, body, true);
     } catch (error) {
       console.error("Could not refresh token. Please log in again.", error);
-      // If refresh fails, prompt for login by clearing tokens which logs the user out.
       await handleLogout();
       return null;
     }
@@ -58,11 +67,22 @@ async function callSpotifyAPI(endpoint, method = "GET", body = null) {
       body: body ? JSON.stringify(body) : null,
     });
 
-    // Referesh if token is expired
+    // Refresh once if the token is expired; a second 401 means the
+    // session is genuinely dead, so log out instead of looping forever.
     if (response.status === 401) {
-      console.log("Spotify token expired. Refreshing…");
-      await refreshToken();
-      return callSpotifyAPI(endpoint, method, body);
+      if (isRetry) {
+        console.error("Spotify rejected refreshed token. Logging out.");
+        await handleLogout();
+        return null;
+      }
+      try {
+        await refreshToken();
+      } catch (error) {
+        console.error("Token refresh failed. Logging out.", error);
+        await handleLogout();
+        return null;
+      }
+      return callSpotifyAPI(endpoint, method, body, true);
     }
 
     // Log any non-2xx responses
@@ -116,12 +136,14 @@ async function handleLogin() {
       url: authUrl,
       interactive: true,
     });
+    // finalUrl is undefined when the user closes the auth window
+    if (!finalUrl) return;
 
     const url = new URL(finalUrl);
     const code = url.searchParams.get("code");
     if (code) {
       await exchangeCodeForToken(code, redirectUri);
-      broadcastState();
+      await broadcastState();
     }
   } catch (e) {
     console.log("Auth flow error:", e.message);
@@ -133,18 +155,16 @@ async function exchangeCodeForToken(code, redirectUri) {
     "spotify_code_verifier"
   );
 
-  const payload = {
-    client_id: SPOTIFY_CLIENT_ID,
-    grant_type: "authorization_code",
-    code,
-    redirect_uri: redirectUri,
-    code_verifier: spotify_code_verifier,
-  };
-
   try {
     const response = await axios.post(
       TOKEN_ENDPOINT,
-      new URLSearchParams(payload),
+      new URLSearchParams({
+        client_id: SPOTIFY_CLIENT_ID,
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: redirectUri,
+        code_verifier: spotify_code_verifier,
+      }),
       {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
       }
@@ -154,6 +174,9 @@ async function exchangeCodeForToken(code, redirectUri) {
       spotify_access_token: access_token,
       spotify_refresh_token: refresh_token,
     });
+  } catch (error) {
+    console.error("Token exchange failed:", error.message);
+    throw error;
   } finally {
     await chrome.storage.local.remove("spotify_code_verifier");
   }
@@ -165,15 +188,13 @@ async function refreshToken() {
   );
   if (!spotify_refresh_token) throw new Error("No refresh token available.");
 
-  const payload = {
-    grant_type: "refresh_token",
-    refresh_token: spotify_refresh_token,
-    client_id: SPOTIFY_CLIENT_ID,
-  };
-
   const response = await axios.post(
     TOKEN_ENDPOINT,
-    new URLSearchParams(payload),
+    new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: spotify_refresh_token,
+      client_id: SPOTIFY_CLIENT_ID,
+    }),
     {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
     }
@@ -193,25 +214,30 @@ async function handleLogout() {
     "spotify_refresh_token",
     "spotify_code_verifier",
   ]);
-  broadcastState(); // Notify UI of logout
+  await broadcastState(); // Notify UI of logout
 }
 
 // --- Timer Logic ---
 // In-memory state for fast access (storage is only for persistence)
 let timerState = {
-  timeLeft: 1500,
-  duration: 1500,
+  timeLeft: DEFAULT_DURATION,
+  duration: DEFAULT_DURATION,
   isRunning: false,
 };
 let countdownIntervalId = null;
 let tickCount = 0; // Track ticks for periodic storage sync
 
-// Initialize in-memory state from storage (called on service worker wake)
+// Initialize in-memory state from storage (called on service worker wake).
+// Message handlers await this so an early `getState` never returns defaults.
 async function initTimerState() {
-  const stored = await chrome.storage.local.get(["timeLeft", "duration", "isRunning"]);
+  const stored = await chrome.storage.local.get([
+    "timeLeft",
+    "duration",
+    "isRunning",
+  ]);
   timerState = {
-    timeLeft: stored.timeLeft ?? 1500,
-    duration: stored.duration ?? 1500,
+    timeLeft: stored.timeLeft ?? DEFAULT_DURATION,
+    duration: stored.duration ?? DEFAULT_DURATION,
     isRunning: stored.isRunning ?? false,
   };
 
@@ -220,6 +246,7 @@ async function initTimerState() {
     countdownIntervalId = setInterval(updateCountdown, 1000);
   }
 }
+const timerStateReady = initTimerState();
 
 // Sync in-memory state to storage (for crash recovery)
 async function syncToStorage() {
@@ -230,9 +257,17 @@ async function syncToStorage() {
   });
 }
 
+function stopCountdownInterval() {
+  if (countdownIntervalId) {
+    clearInterval(countdownIntervalId);
+    countdownIntervalId = null;
+  }
+}
+
 async function startTimer() {
   if (timerState.isRunning) return;
 
+  const isFreshStart = timerState.timeLeft === timerState.duration;
   timerState.isRunning = true;
   await syncToStorage();
 
@@ -244,20 +279,48 @@ async function startTimer() {
     tickCount = 0;
     countdownIntervalId = setInterval(updateCountdown, 1000);
   }
-  await callSpotifyAPI("/me/player/play", "PUT");
-  broadcastState();
+
+  if (await isSpotifyConnected()) {
+    try {
+      const { workPlaylistId } = await chrome.storage.local.get(
+        "workPlaylistId"
+      );
+      if (isFreshStart && workPlaylistId) {
+        await callSpotifyAPI("/me/player/play", "PUT", {
+          context_uri: `spotify:playlist:${workPlaylistId}`,
+        });
+      } else {
+        await callSpotifyAPI("/me/player/play", "PUT");
+      }
+    } catch (error) {
+      // Playback failures (e.g. no active device) shouldn't block the timer
+      console.warn("Could not start Spotify playback:", error.message);
+    }
+  }
+  await broadcastState();
 }
 
 async function pauseTimer() {
+  if (!timerState.isRunning) return;
+
   timerState.isRunning = false;
   await syncToStorage(); // Persist current time when pausing
   await chrome.alarms.clear("pomodoroTimer");
+  stopCountdownInterval();
 
-  if (countdownIntervalId) {
-    clearInterval(countdownIntervalId);
-    countdownIntervalId = null;
+  // Pause Spotify from the background so the feature works even when
+  // the popup is closed.
+  const { pauseMusicOnPause } = await chrome.storage.local.get(
+    "pauseMusicOnPause"
+  );
+  if (pauseMusicOnPause && (await isSpotifyConnected())) {
+    try {
+      await callSpotifyAPI("/me/player/pause", "PUT");
+    } catch (error) {
+      console.warn("Could not pause Spotify playback:", error.message);
+    }
   }
-  broadcastState();
+  await broadcastState();
 }
 
 async function resetTimer() {
@@ -265,72 +328,49 @@ async function resetTimer() {
   timerState.timeLeft = timerState.duration;
   await syncToStorage();
   await chrome.alarms.clear("pomodoroTimer");
-
-  if (countdownIntervalId) {
-    clearInterval(countdownIntervalId);
-    countdownIntervalId = null;
-  }
-  broadcastState();
+  stopCountdownInterval();
+  await broadcastState();
 }
 
 async function setTimer(newDuration) {
   timerState.duration = newDuration;
   timerState.timeLeft = newDuration;
   await syncToStorage();
-  broadcastState();
-}
 
-async function updateCountdown() {
-  if (!timerState.isRunning) {
-    clearInterval(countdownIntervalId);
-    countdownIntervalId = null;
-    return;
-  }
-
-  timerState.timeLeft -= 1;
-  tickCount += 1;
-
-  if (timerState.timeLeft >= 0) {
-    // Only sync to storage every 10 seconds (reduces I/O by 90%)
-    if (tickCount % 10 === 0) {
-      await syncToStorage();
-    }
-    broadcastState();
-  } else {
-    // Timer finished
-    timerState.isRunning = false;
-    timerState.timeLeft = timerState.duration;
-    await syncToStorage();
-    clearInterval(countdownIntervalId);
-    countdownIntervalId = null;
-  }
-}
-
-// Initialize state when service worker starts
-initTimerState();
-
-// --- Event Listeners ---
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.set({
-    timeLeft: 1500,   // 25 minutes
-    duration: 1500,   // 25 minutes
-    isRunning: false,
-  });
-});
-
-chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name !== "pomodoroTimer") return;
-
-  const { duration, breakPlaylistId } = await chrome.storage.local.get([
-    "duration",
-    "breakPlaylistId"
-  ]);
-  await chrome.storage.local.set({ isRunning: false, timeLeft: duration });
-
-  if (breakPlaylistId) {
-    await callSpotifyAPI("/me/player/play", "PUT", {
-      context_uri: `spotify:playlist:${breakPlaylistId}`,
+  // If the timer is running, the old alarm points at the old end time.
+  if (timerState.isRunning) {
+    await chrome.alarms.clear("pomodoroTimer");
+    chrome.alarms.create("pomodoroTimer", {
+      delayInMinutes: newDuration / 60,
     });
+  }
+  await broadcastState();
+}
+
+// Single completion path shared by the countdown interval and the alarm.
+// Guarded so whichever fires first wins and the other becomes a no-op.
+async function finishTimer() {
+  if (!timerState.isRunning) return;
+
+  timerState.isRunning = false;
+  timerState.timeLeft = timerState.duration;
+  await syncToStorage();
+  await chrome.alarms.clear("pomodoroTimer");
+  stopCountdownInterval();
+
+  if (await isSpotifyConnected()) {
+    try {
+      const { breakPlaylistId } = await chrome.storage.local.get(
+        "breakPlaylistId"
+      );
+      if (breakPlaylistId) {
+        await callSpotifyAPI("/me/player/play", "PUT", {
+          context_uri: `spotify:playlist:${breakPlaylistId}`,
+        });
+      }
+    } catch (error) {
+      console.warn("Could not switch to break playlist:", error.message);
+    }
   }
 
   chrome.notifications.create({
@@ -340,18 +380,58 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     message: "Your Pomodoro session has ended.",
     priority: 2,
   });
-  broadcastState();
-  
+
+  await broadcastState({ timerFinished: true });
+
   chrome.action.openPopup().catch(() => {
-    // nothing to do here
+    // openPopup requires a user gesture in some Chrome versions; the
+    // notification above is the fallback.
   });
+}
 
+async function updateCountdown() {
+  if (!timerState.isRunning) {
+    stopCountdownInterval();
+    return;
+  }
 
+  timerState.timeLeft -= 1;
+  tickCount += 1;
+
+  if (timerState.timeLeft > 0) {
+    // Only sync to storage every 10 seconds (reduces I/O by 90%)
+    if (tickCount % 10 === 0) {
+      await syncToStorage();
+    }
+    await broadcastState();
+  } else {
+    await finishTimer();
+  }
+}
+
+// --- Event Listeners ---
+chrome.runtime.onInstalled.addListener((details) => {
+  // Only seed defaults on first install; updating the extension
+  // should not wipe an in-progress session.
+  if (details.reason === "install") {
+    chrome.storage.local.set({
+      timeLeft: DEFAULT_DURATION,
+      duration: DEFAULT_DURATION,
+      isRunning: false,
+    });
+  }
+});
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== "pomodoroTimer") return;
+  await timerStateReady;
+  await finishTimer();
 });
 
 // MERGED MESSAGE LISTENER
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   (async () => {
+    await timerStateReady;
     try {
       switch (request.command) {
         // Auth Commands
@@ -382,12 +462,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sendResponse({ status: "ok" });
           break;
         case "getState":
-          // Return timer state from memory (faster than storage read)
-          sendResponse({
-            timeLeft: timerState.timeLeft,
-            isRunning: timerState.isRunning,
-            duration: timerState.duration,
-          });
+          sendResponse(await getPublicState());
           break;
 
         // Spotify Player Commands
@@ -415,7 +490,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sendResponse({ status: "ok" });
           break;
         case "getPlaylists": {
-          const playlistResponse = await callSpotifyAPI("/me/playlists");
+          const playlistResponse = await callSpotifyAPI("/me/playlists?limit=50");
           if (playlistResponse && playlistResponse.items) {
             sendResponse(playlistResponse);
           } else {
@@ -444,13 +519,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   return true;
 });
 
-function broadcastState() {
-  // Only send timer-relevant fields from in-memory state (no storage read!)
-  const state = {
+// State shared with the popup. Exposes only a boolean auth flag,
+// never the tokens themselves.
+async function getPublicState() {
+  return {
     timeLeft: timerState.timeLeft,
     isRunning: timerState.isRunning,
     duration: timerState.duration,
+    isAuthenticated: await isSpotifyConnected(),
   };
+}
+
+async function broadcastState(extra = {}) {
+  const state = { ...(await getPublicState()), ...extra };
   chrome.runtime.sendMessage({ command: "updateState", state }).catch((err) => {
     if (err.message.includes("Could not establish connection")) {
       // This is normal if the popup is not open.

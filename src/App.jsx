@@ -8,24 +8,17 @@ function App() {
   const [currentView, setCurrentView] = useState("pomodoro");
   // default settings on installed
   const [settings, setSettings] = useState({
-    playSoundOnEnd: false,
     pauseMusicOnPause: false,
     workPlaylistId: null,
     breakPlaylistId: null,
   });
 
-  // Update settings
+  // Load persisted settings on mount
   useEffect(() => {
     chrome.storage.local.get(
-      [
-        "playSoundOnEnd",
-        "pauseMusicOnPause",
-        "workPlaylistId",
-        "breakPlaylistId",
-      ],
+      ["pauseMusicOnPause", "workPlaylistId", "breakPlaylistId"],
       (stored) => {
         setSettings({
-          playSoundOnEnd: stored.playSoundOnEnd ?? false,
           pauseMusicOnPause: stored.pauseMusicOnPause ?? false,
           workPlaylistId: stored.workPlaylistId ?? null,
           breakPlaylistId: stored.breakPlaylistId ?? null,
@@ -54,7 +47,7 @@ function App() {
   return (
     <div className="app-container">
       {currentView === "pomodoro" ? (
-        <Pomodoro settings={settings} onOpenSettings={openSettings} />
+        <Pomodoro onOpenSettings={openSettings} />
       ) : (
         <Settings
           settings={settings}

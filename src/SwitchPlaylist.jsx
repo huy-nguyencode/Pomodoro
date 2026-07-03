@@ -1,62 +1,54 @@
 import { useState, useEffect } from "react";
 import { useSpotifyAuth } from "./useSpotifyAuth";
 
-const SwitchPlaylist = () => {
-  const { accessToken } = useSpotifyAuth();
+const SwitchPlaylist = ({ settings, onSettingChange }) => {
+  const { isAuthenticated } = useSpotifyAuth();
   const [playlists, setPlaylists] = useState([]);
-  const [selectedWorkPlaylist, setSelectedWorkPlaylist] = useState("");
-  const [selectedBreakPlaylist, setSelectedBreakPlaylist] = useState("");
+  const [loadError, setLoadError] = useState(false);
+
+  const { workPlaylistId, breakPlaylistId } = settings;
 
   // Fetch playlists from the service worker
   useEffect(() => {
-    if (accessToken) {
-      chrome.runtime.sendMessage({ command: "getPlaylists" }, (response) => {
-        if (response && response.items) {
-          setPlaylists(response.items);
-        } else {
-          console.error("Failed to fetch playlists:", response);
-          setPlaylists([]);
-        }
-      });
-    }
-  }, [accessToken]);
-
-  // Load saved playlist selections from storage
-  useEffect(() => {
-    chrome.storage.local.get(["workPlaylistId", "breakPlaylistId"], (result) => {
-      if (result.workPlaylistId) {
-        setSelectedWorkPlaylist(result.workPlaylistId);
+    if (!isAuthenticated) return;
+    chrome.runtime.sendMessage({ command: "getPlaylists" }, (response) => {
+      if (chrome.runtime.lastError || !response || !response.items) {
+        console.error("Failed to fetch playlists:", response);
+        setPlaylists([]);
+        setLoadError(true);
+        return;
       }
-      if (result.breakPlaylistId) {
-        setSelectedBreakPlaylist(result.breakPlaylistId);
-      }
+      setPlaylists(response.items);
+      setLoadError(false);
     });
-  }, []);
+  }, [isAuthenticated]);
 
-  const handleWorkPlaylistChange = (e) => {
-    const playlistId = e.target.value;
-    setSelectedWorkPlaylist(playlistId);
-    chrome.storage.local.set({ workPlaylistId: playlistId });
+  // Route changes through App's settings handler so parent state and
+  // chrome.storage stay in sync.
+  const handlePlaylistChange = (settingKey) => (e) => {
+    onSettingChange({
+      ...settings,
+      [settingKey]: e.target.value || null,
+    });
   };
 
-  const handleBreakPlaylistChange = (e) => {
-    const playlistId = e.target.value;
-    setSelectedBreakPlaylist(playlistId);
-    chrome.storage.local.set({ breakPlaylistId: playlistId });
-  };
-
-  if (!accessToken) {
+  if (!isAuthenticated) {
     return <p>Please log in to Spotify to select playlists.</p>;
   }
 
   return (
     <div className="playlist-container">
+      {loadError && (
+        <p className="playlist-error">
+          Could not load your playlists. Try reconnecting Spotify.
+        </p>
+      )}
       <div className="playlist-selector">
         <label htmlFor="work-playlist">Work Playlist</label>
         <select
           id="work-playlist"
-          value={selectedWorkPlaylist}
-          onChange={handleWorkPlaylistChange}
+          value={workPlaylistId || ""}
+          onChange={handlePlaylistChange("workPlaylistId")}
         >
           <option value="">Select a playlist</option>
           {playlists.map((playlist) => (
@@ -70,8 +62,8 @@ const SwitchPlaylist = () => {
         <label htmlFor="break-playlist">Break Playlist</label>
         <select
           id="break-playlist"
-          value={selectedBreakPlaylist}
-          onChange={handleBreakPlaylistChange}
+          value={breakPlaylistId || ""}
+          onChange={handlePlaylistChange("breakPlaylistId")}
         >
           <option value="">Select a playlist</option>
           {playlists.map((playlist) => (

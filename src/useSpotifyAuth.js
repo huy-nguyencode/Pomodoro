@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 
 export const useSpotifyAuth = () => {
-  const [accessToken, setAccessToken] = useState(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Function to sync state of access token from background script
+  // Sync auth status from the background script. The background only
+  // ever shares a boolean flag, never the tokens themselves.
   const syncState = useCallback(() => {
     setIsLoading(true);
     chrome.runtime.sendMessage({ command: "getState" }, (response) => {
@@ -16,7 +17,7 @@ export const useSpotifyAuth = () => {
         return;
       }
       if (response) {
-        setAccessToken(response.spotify_access_token || null);
+        setIsAuthenticated(Boolean(response.isAuthenticated));
       }
       setIsLoading(false);
     });
@@ -25,9 +26,9 @@ export const useSpotifyAuth = () => {
   useEffect(() => {
     syncState();
     // Set up a listener for broadcasts from the background script
-    const handleMessage = (message, _sender, _sendResponse) => {
+    const handleMessage = (message) => {
       if (message.command === "updateState") {
-        setAccessToken(message.state.spotify_access_token || null);
+        setIsAuthenticated(Boolean(message.state.isAuthenticated));
       }
     };
     chrome.runtime.onMessage.addListener(handleMessage);
@@ -37,17 +38,19 @@ export const useSpotifyAuth = () => {
     };
   }, [syncState]);
 
-  // Command functions that just send a message to the background script
-  const login = () => {
-    chrome.runtime.sendMessage({ command: "login" });
-  };
+  const login = useCallback(() => {
+    setIsLoading(true);
+    chrome.runtime.sendMessage({ command: "login" }, () => {
+      setIsLoading(false);
+    });
+  }, []);
 
-  const logout = () => {
+  const logout = useCallback(() => {
     chrome.runtime.sendMessage({ command: "logout" });
-  };
+  }, []);
 
   return {
-    accessToken,
+    isAuthenticated,
     isLoading,
     error,
     login,

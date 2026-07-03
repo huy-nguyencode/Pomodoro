@@ -2,17 +2,31 @@ import { useSpotifyAuth } from "./useSpotifyAuth";
 import spotifyIcon from "./assets/spotifyIcon.png";
 import SwitchPlaylist from "./SwitchPlaylist";
 
+// Defined at module level so it isn't recreated on every Settings render
+const ToggleSwitch = ({ isOn, onToggle, label }) => {
+  return (
+    <div className="toggle-container">
+      <span className="toggle-label">{label}</span>
+      <div
+        className={`toggle-switch ${isOn ? "active" : ""}`}
+        onClick={onToggle}
+      >
+        <div className="toggle-slider"></div>
+      </div>
+    </div>
+  );
+};
 
 function Settings({ onSettingChange, onCloseSettings, settings }) {
   // Getting current settings
   const { pauseMusicOnPause } = settings;
   //Get hooks from spotifyAuth
-  const { accessToken, isLoading, login, logout } =
+  const { isAuthenticated, isLoading, error, login, logout } =
     useSpotifyAuth();
 
   //Handling login and logout
   const handleSpotifyConnection = () => {
-    if (accessToken) {
+    if (isAuthenticated) {
       logout();
     } else {
       login();
@@ -26,20 +40,6 @@ function Settings({ onSettingChange, onCloseSettings, settings }) {
     };
     // Call the function from App.jsx to update the master state
     onSettingChange(newSettings);
-  };
-
-  const ToggleSwitch = ({ isOn, onToggle, label }) => {
-    return (
-      <div className="toggle-container">
-        <span className="toggle-label">{label}</span>
-        <div
-          className={`toggle-switch ${isOn ? "active" : ""}`}
-          onClick={onToggle}
-        >
-          <div className="toggle-slider"></div>
-        </div>
-      </div>
-    );
   };
 
   return (
@@ -63,7 +63,7 @@ function Settings({ onSettingChange, onCloseSettings, settings }) {
           </svg>
         </button>
         <div className="spotify-connection">
-          {accessToken ? (
+          {isAuthenticated ? (
             <div className="connected-state">
               <div className="spotify-info">
                 <div className="spotify-setting-logo">
@@ -87,15 +87,18 @@ function Settings({ onSettingChange, onCloseSettings, settings }) {
               {isLoading ? "Loading" : "Connect"}
             </button>
           )}
+          {error && <p className="settings-error">{error}</p>}
         </div>
 
-        {accessToken && <SwitchPlaylist settings={settings} onSettingChange={onSettingChange}/>}
+        {isAuthenticated && (
+          <SwitchPlaylist settings={settings} onSettingChange={onSettingChange} />
+        )}
 
         <div className="timer-settings">
           <div className="setting-item">
             <ToggleSwitch
               isOn={pauseMusicOnPause}
-              onToggle={() => handleToggle('pauseMusicOnPause')}
+              onToggle={() => handleToggle("pauseMusicOnPause")}
               label="Pause music on timer pause"
             />
           </div>

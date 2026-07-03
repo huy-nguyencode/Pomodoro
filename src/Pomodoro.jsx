@@ -1,23 +1,20 @@
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import { usePomodoroTimer } from "./usePomodoroTimer";
 import { useSpotifyPlayback } from "./useSpotifyPlayback";
-import { PRESET_TIMES} from "./constants";
+import { PRESET_TIMES } from "./constants";
 import { SpotifyBanner } from "./SpotifyBanner";
 import { TimerControls } from "./TimerControls";
 import { TimerSelectionMenu } from "./TimeSelectionMenu";
 import { TimerUpPopup } from "./TimerUpPopup";
 
-function Pomodoro({ settings = {}, onOpenSettings }) {
-
-  const [activePreset, setActivePreset] = useState(1);
+function Pomodoro({ onOpenSettings }) {
   const [showTimeMenu, setShowTimeMenu] = useState(false);
-  const {pauseMusicOnPause = false} = settings;
-  const [showTimerUp, setShowTimerUp] = useState(false);
-  // Using ref instead of state - this value shouldn't trigger re-renders
-  const wasPlayingBeforePause = useRef(false);
 
   const {
+    duration,
     isRunning,
+    timerFinished,
+    dismissTimerFinished,
     formattedTime,
     toggleTimer,
     resetTimer,
@@ -27,42 +24,18 @@ function Pomodoro({ settings = {}, onOpenSettings }) {
   const {
     currentTrack,
     isSpotifyPlaying,
-    accessToken,
+    isAuthenticated,
     controls: spotifyControls,
   } = useSpotifyPlayback();
 
-  // Handler to close the timer-up popup
-  const handleClosePopup = () => {
-    setShowTimerUp(false);
-  };
+  // Highlight the preset matching the actual timer duration, so the UI
+  // stays correct across popup reopens and custom durations.
+  const activePreset = PRESET_TIMES.findIndex(
+    (preset) => preset.seconds === duration
+  );
 
-  
-  useEffect(() => {
-    if (!pauseMusicOnPause || !accessToken) return;
-
-    //if clock is running, continue music
-    if (isRunning) {
-      if (wasPlayingBeforePause.current) {
-        spotifyControls.togglePlayPause();
-        wasPlayingBeforePause.current = false;
-      }
-    } else {
-      if (isSpotifyPlaying) {
-        spotifyControls.togglePlayPause();
-        wasPlayingBeforePause.current = true;
-      }
-    }
-  }, [
-    isRunning,
-    pauseMusicOnPause,
-    accessToken,
-    isSpotifyPlaying,
-    spotifyControls,
-  ]);
-
-  const selectPreset = (seconds, index) => {
+  const selectPreset = (seconds) => {
     setTimer(seconds);
-    setActivePreset(index);
   };
 
   return (
@@ -92,8 +65,9 @@ function Pomodoro({ settings = {}, onOpenSettings }) {
         </button>
 
         <div
-          className={`liveTimer-container ${!isRunning ? "double-clickable" : ""}`}
+          className={`liveTimer-container ${!isRunning ? "clickable" : ""}`}
           onClick={() => !isRunning && setShowTimeMenu(true)}
+          title={!isRunning ? "Click to set a custom time" : undefined}
         >
           <p>{formattedTime}</p>
         </div>
@@ -108,7 +82,7 @@ function Pomodoro({ settings = {}, onOpenSettings }) {
         />
       </div>
 
-      {accessToken && (
+      {isAuthenticated && (
         <SpotifyBanner
           track={currentTrack}
           isPlaying={isSpotifyPlaying}
@@ -122,7 +96,7 @@ function Pomodoro({ settings = {}, onOpenSettings }) {
           onClose={() => setShowTimeMenu(false)}
         />
       )}
-      {showTimerUp && <TimerUpPopup onClose={handleClosePopup} />}
+      {timerFinished && <TimerUpPopup onClose={dismissTimerFinished} />}
     </div>
   );
 }

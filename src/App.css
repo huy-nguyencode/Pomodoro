@@ -52,11 +52,11 @@ body {
   transition: all 0.2s ease;
 }
 
-.liveTimer-container.double-clickable {
+.liveTimer-container.clickable {
   cursor: pointer;
 }
 
-.liveTimer-container.double-clickable:hover {
+.liveTimer-container.clickable:hover {
   background: #505050;
   transform: scale(1.02);
 }
@@ -71,20 +71,6 @@ body {
   text-align: center;
   margin: 0;
   letter-spacing: 2px;
-}
-
-.double-click-hint {
-  font-family: Poppins, sans-serif;
-  font-size: 10px;
-  color: #aaaaaa;
-  text-align: center;
-  margin-top: 8px;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-
-.liveTimer-container.double-clickable:hover .double-click-hint {
-  opacity: 1;
 }
 
 /* Time Menu Styles */
@@ -761,4 +747,13 @@ body {
   border-radius: 8px;
   font-family: Poppins, sans-serif;
   font-size: 14px;
+}
+
+.playlist-error,
+.settings-error {
+  font-family: Poppins, sans-serif;
+  font-size: 12px;
+  color: #ff8a80;
+  text-align: center;
+  margin: 8px 0 0;
 }

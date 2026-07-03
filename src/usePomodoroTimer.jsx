@@ -1,14 +1,19 @@
-// huy8n/pomodoro/Pomodoro-feature-extension/react-pomodoro/src/usePomodoroTimer.jsx
 import { useState, useEffect, useCallback } from "react";
 
 export const usePomodoroTimer = () => {
   const [timeLeft, setTimeLeft] = useState(null); // Start as null
+  const [duration, setDuration] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
+  const [timerFinished, setTimerFinished] = useState(false);
 
   const updateLocalState = useCallback((state) => {
     if (state) {
       setTimeLeft(state.timeLeft);
+      setDuration(state.duration);
       setIsRunning(state.isRunning);
+      if (state.timerFinished) {
+        setTimerFinished(true);
+      }
     }
   }, []);
 
@@ -44,6 +49,8 @@ export const usePomodoroTimer = () => {
     chrome.runtime.sendMessage({ command: "setDuration", duration: seconds });
   };
 
+  const dismissTimerFinished = () => setTimerFinished(false);
+
   const formatTime = (seconds) => {
     if (seconds === null || typeof seconds !== "number") return "00:00"; // Handle null state
     const hours = Math.floor(seconds / 3600);
@@ -59,7 +66,10 @@ export const usePomodoroTimer = () => {
 
   return {
     timeLeft,
+    duration,
     isRunning,
+    timerFinished,
+    dismissTimerFinished,
     formattedTime: formatTime(timeLeft),
     toggleTimer,
     resetTimer,
