@@ -7,10 +7,14 @@ import { TimerControls } from "./TimerControls";
 import { TimerSelectionMenu } from "./TimeSelectionMenu";
 import { TimerUpPopup } from "./TimerUpPopup";
 
+const RING_RADIUS = 100;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
 function Pomodoro({ onOpenSettings }) {
   const [showTimeMenu, setShowTimeMenu] = useState(false);
 
   const {
+    timeLeft,
     duration,
     isRunning,
     timerFinished,
@@ -38,11 +42,24 @@ function Pomodoro({ onOpenSettings }) {
     setTimer(seconds);
   };
 
+  // 1 = full ring at start, 0 = empty when time is up
+  const ringProgress =
+    duration && typeof timeLeft === "number" ? timeLeft / duration : 1;
+
   return (
     <div className="app-container">
       <div className="pomodoro-container">
-        <h1>PomoSpot</h1>
-        <button className="settings-btn" onClick={onOpenSettings}>
+        <header className="app-header">
+          <h1>PomoSpot</h1>
+          <span className={`status-chip ${isRunning ? "running" : ""}`}>
+            {isRunning ? "Focusing" : "Ready"}
+          </span>
+        </header>
+        <button
+          className="settings-btn"
+          onClick={onOpenSettings}
+          title="Settings"
+        >
           <svg
             xmlns="http://www.w3.org/2000/svg"
             fill="none"
@@ -69,7 +86,21 @@ function Pomodoro({ onOpenSettings }) {
           onClick={() => !isRunning && setShowTimeMenu(true)}
           title={!isRunning ? "Click to set a custom time" : undefined}
         >
-          <p>{formattedTime}</p>
+          <svg className="timer-ring" viewBox="0 0 220 220">
+            <circle className="timer-ring-track" cx="110" cy="110" r={RING_RADIUS} />
+            <circle
+              className="timer-ring-progress"
+              cx="110"
+              cy="110"
+              r={RING_RADIUS}
+              strokeDasharray={RING_CIRCUMFERENCE}
+              strokeDashoffset={RING_CIRCUMFERENCE * (1 - ringProgress)}
+            />
+          </svg>
+          <div className="timer-readout">
+            <p>{formattedTime}</p>
+            {!isRunning && <span className="timer-hint">tap to edit</span>}
+          </div>
         </div>
 
         <TimerControls
